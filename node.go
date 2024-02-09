@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	internal "github.com/davidandw190/chord/internal"
 	"google.golang.org/grpc"
 )
 
@@ -26,7 +27,7 @@ type Storage interface {
 }
 
 type Node struct {
-	*Node
+	*internal.Node
 
 	predecessor *Node
 	predMtx     sync.RWMutex

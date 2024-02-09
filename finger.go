@@ -1,16 +1,14 @@
 package chord
 
-import "math/big"
+import (
+	"math/big"
+
+	internal "github.com/davidandw190/chord/internal"
+)
 
 type fingerTable []*fingerEntry
 
-// fingerEntry represents a single finger table entry
-type fingerEntry struct {
-	ID   []byte // ID hash of (n + 2^i) mod (2^m)
-	Node *Node  // RemoteNode that Start points to
-}
-
-func newFingerTable(node *Node) fingerTable {
+func newFingerTable(node *internal.Node) fingerTable {
 	ft := make([]*fingerEntry, 8)
 	for i := range ft {
 		ft[i] = newFingerEntry(fingerMath(node.Id, i, 8), node)
@@ -19,8 +17,14 @@ func newFingerTable(node *Node) fingerTable {
 	return ft
 }
 
+// fingerEntry represents a single finger table entry
+type fingerEntry struct {
+	ID   []byte         // ID hash of (n + 2^i) mod (2^m)
+	Node *internal.Node // RemoteNode that Start points to
+}
+
 // newFingerEntry returns an allocated new finger entry with the attributes set
-func newFingerEntry(id []byte, node *Node) *fingerEntry {
+func newFingerEntry(id []byte, node *internal.Node) *fingerEntry {
 	return &fingerEntry{
 		ID:   id,
 		Node: node,
