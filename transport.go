@@ -18,9 +18,7 @@ type GrpcTransport struct {
 	timeout time.Duration
 	maxIdle time.Duration
 
-	sock    *net.TCPListener
-	inbound map[*net.TCPConn]bool
-	inMtx   sync.RWMutex
+	sock *net.TCPListener
 
 	pool    map[string]*grpcConn
 	poolMtx sync.RWMutex
@@ -41,12 +39,7 @@ func (g *grpcConn) Close() {
 	g.conn.Close()
 }
 
-func (g *GrpcTransport) GetServer() *grpc.Server {
-	return g.server
-}
-
-// Creates a new TCP transport on the given listen address with the
-// configured timeout duration.
+// func NewGrpcTransport(config *Config) (internal.ChordClient, error) {
 func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
 
 	addr := config.addr
@@ -56,8 +49,6 @@ func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
 		return nil, err
 	}
 
-	// allocate maps
-	inbound := make(map[*net.TCPConn]bool)
 	pool := make(map[string]*grpcConn)
 
 	// Setup the transport
@@ -65,7 +56,6 @@ func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
 		sock:    listener.(*net.TCPListener),
 		timeout: config.Timeout,
 		maxIdle: config.MaxIdle,
-		inbound: inbound,
 		pool:    pool,
 	}
 
@@ -81,31 +71,23 @@ func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
 	return grp, nil
 }
 
-// Dial wraps grpc's dial function with settings that facilitate the
-// functionality of gmaj.
-func Dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	return grpc.Dial(addr, append(append(opts,
-		grpc.WithBlock(),
-		grpc.WithTimeout(5*time.Second),
-		grpc.FailOnNonTempDialError(true)),
-	)...)
+func (g *GrpcTransport) GetServer() *grpc.Server {
+	return g.server
 }
 
 // Shutdown the TCP transport
 func (g *GrpcTransport) Shutdown() {
 	atomic.StoreInt32(&g.shutdown, 1)
 
-	// Close all the inbound connections
-	g.inMtx.RLock()
-	g.server.Stop()
-	g.inMtx.RUnlock()
-
-	// Close all the outbound
+	// Close all the connections
 	g.poolMtx.Lock()
+
+	g.server.Stop()
 	for _, conn := range g.pool {
 		conn.Close()
 	}
 	g.pool = nil
+
 	g.poolMtx.Unlock()
 }
 
@@ -185,4 +167,14 @@ func (g *GrpcTransport) reapOnce() {
 // Listens for inbound connections
 func (g *GrpcTransport) listen() {
 	g.server.Serve(g.sock)
+}
+
+// Dial wraps grpc's dial function with settings that facilitate the
+// functionality of gmaj.
+func Dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	return grpc.Dial(addr, append(append(opts,
+		grpc.WithBlock(),
+		grpc.WithTimeout(5*time.Second),
+		grpc.FailOnNonTempDialError(true)),
+	)...)
 }
