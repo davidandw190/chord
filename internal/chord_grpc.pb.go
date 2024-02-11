@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Chord_GetPredecessor_FullMethodName         = "/internal.Chord/GetPredecessor"
-	Chord_GetSuccessor_FullMethodName           = "/internal.Chord/GetSuccessor"
-	Chord_Notify_FullMethodName                 = "/internal.Chord/Notify"
-	Chord_ClosestPrecedingFinger_FullMethodName = "/internal.Chord/ClosestPrecedingFinger"
-	Chord_FindSuccessor_FullMethodName          = "/internal.Chord/FindSuccessor"
+	Chord_GetPredecessor_FullMethodName   = "/internal.Chord/GetPredecessor"
+	Chord_GetSuccessor_FullMethodName     = "/internal.Chord/GetSuccessor"
+	Chord_Notify_FullMethodName           = "/internal.Chord/Notify"
+	Chord_FindSuccessor_FullMethodName    = "/internal.Chord/FindSuccessor"
+	Chord_CheckPredecessor_FullMethodName = "/internal.Chord/CheckPredecessor"
 )
 
 // ChordClient is the client API for Chord service.
@@ -37,12 +37,11 @@ type ChordClient interface {
 	// Notify notifies Chord that Node thinks it is our predecessor. This has
 	// the potential to initiate the transferring of keys.
 	Notify(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ER, error)
-	// ClosestPrecedingFinger returns the entry of the finger table that
-	// precedes ID but is closest to it.
-	ClosestPrecedingFinger(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error)
 	// FindSuccessor finds the node the succedes ID. May initiate RPC calls to
 	// other nodes.
 	FindSuccessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error)
+	// CheckPredecessor checkes whether predecessor has failed.
+	CheckPredecessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*ER, error)
 }
 
 type chordClient struct {
@@ -80,18 +79,18 @@ func (c *chordClient) Notify(ctx context.Context, in *Node, opts ...grpc.CallOpt
 	return out, nil
 }
 
-func (c *chordClient) ClosestPrecedingFinger(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error) {
+func (c *chordClient) FindSuccessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error) {
 	out := new(Node)
-	err := c.cc.Invoke(ctx, Chord_ClosestPrecedingFinger_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, Chord_FindSuccessor_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *chordClient) FindSuccessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error) {
-	out := new(Node)
-	err := c.cc.Invoke(ctx, Chord_FindSuccessor_FullMethodName, in, out, opts...)
+func (c *chordClient) CheckPredecessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*ER, error) {
+	out := new(ER)
+	err := c.cc.Invoke(ctx, Chord_CheckPredecessor_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +108,11 @@ type ChordServer interface {
 	// Notify notifies Chord that Node thinks it is our predecessor. This has
 	// the potential to initiate the transferring of keys.
 	Notify(context.Context, *Node) (*ER, error)
-	// ClosestPrecedingFinger returns the entry of the finger table that
-	// precedes ID but is closest to it.
-	ClosestPrecedingFinger(context.Context, *ID) (*Node, error)
 	// FindSuccessor finds the node the succedes ID. May initiate RPC calls to
 	// other nodes.
 	FindSuccessor(context.Context, *ID) (*Node, error)
+	// CheckPredecessor checkes whether predecessor has failed.
+	CheckPredecessor(context.Context, *ID) (*ER, error)
 	mustEmbedUnimplementedChordServer()
 }
 
@@ -131,11 +129,11 @@ func (UnimplementedChordServer) GetSuccessor(context.Context, *ER) (*Node, error
 func (UnimplementedChordServer) Notify(context.Context, *Node) (*ER, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Notify not implemented")
 }
-func (UnimplementedChordServer) ClosestPrecedingFinger(context.Context, *ID) (*Node, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ClosestPrecedingFinger not implemented")
-}
 func (UnimplementedChordServer) FindSuccessor(context.Context, *ID) (*Node, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FindSuccessor not implemented")
+}
+func (UnimplementedChordServer) CheckPredecessor(context.Context, *ID) (*ER, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckPredecessor not implemented")
 }
 func (UnimplementedChordServer) mustEmbedUnimplementedChordServer() {}
 
@@ -204,24 +202,6 @@ func _Chord_Notify_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Chord_ClosestPrecedingFinger_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ChordServer).ClosestPrecedingFinger(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Chord_ClosestPrecedingFinger_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ChordServer).ClosestPrecedingFinger(ctx, req.(*ID))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Chord_FindSuccessor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ID)
 	if err := dec(in); err != nil {
@@ -236,6 +216,24 @@ func _Chord_FindSuccessor_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ChordServer).FindSuccessor(ctx, req.(*ID))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_CheckPredecessor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ID)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).CheckPredecessor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_CheckPredecessor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).CheckPredecessor(ctx, req.(*ID))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -260,12 +258,12 @@ var Chord_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Chord_Notify_Handler,
 		},
 		{
-			MethodName: "ClosestPrecedingFinger",
-			Handler:    _Chord_ClosestPrecedingFinger_Handler,
-		},
-		{
 			MethodName: "FindSuccessor",
 			Handler:    _Chord_FindSuccessor_Handler,
+		},
+		{
+			MethodName: "CheckPredecessor",
+			Handler:    _Chord_CheckPredecessor_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

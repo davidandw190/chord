@@ -1,6 +1,7 @@
 package chord
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +13,21 @@ import (
 	"google.golang.org/grpc"
 )
 
+var (
+	emptyNode    = &internal.Node{}
+	emptyRequest = &internal.ER{}
+)
+
+// Transport interface defines the methods needed for a Chord ring.
+type Transport interface {
+	Start()
+	GetSuccessor(*internal.Node) (*internal.Node, error)
+	FindSuccessor(*internal.Node, []byte) (*internal.Node, error)
+	GetPredecessor(*internal.Node) (*internal.Node, error)
+	Notify(*internal.Node, *internal.Node) error
+}
+
+// GrpcTransport struct implements the Transport interface using gRPC.
 type GrpcTransport struct {
 	config *Config
 
@@ -28,6 +44,7 @@ type GrpcTransport struct {
 	shutdown int32
 }
 
+// grpcConn represents a gRPC connection in the connection pool.
 type grpcConn struct {
 	addr       string
 	client     internal.ChordClient
@@ -35,85 +52,123 @@ type grpcConn struct {
 	lastActive time.Time
 }
 
+// Close closes the gRPC connection.
 func (g *grpcConn) Close() {
 	g.conn.Close()
 }
 
-// func NewGrpcTransport(config *Config) (internal.ChordClient, error) {
-func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
+// Dial wraps grpc's dial function with settings that facilitate the functionality of transport.
+func Dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	return grpc.Dial(addr, append(append(opts,
+		grpc.WithBlock(),
+		grpc.WithTimeout(5*time.Second),
+		grpc.FailOnNonTempDialError(true)),
+		grpc.WithInsecure(),
+	)...)
+}
 
-	addr := config.addr
-	// Try to start the listener
+// GetServer returns the gRPC server associated with the transport.
+func (g *GrpcTransport) GetServer() *grpc.Server {
+	return g.server
+}
+
+// Start starts the RPC server and reaps old connections.
+func (g *GrpcTransport) Start() {
+	go g.listen()
+	go g.reapOld()
+}
+
+// NewGrpcTransport creates a new instance of GrpcTransport.
+func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
+	addr := config.Addr
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-
 	pool := make(map[string]*grpcConn)
-
-	// Setup the transport
 	grp := &GrpcTransport{
 		sock:    listener.(*net.TCPListener),
 		timeout: config.Timeout,
 		maxIdle: config.MaxIdle,
 		pool:    pool,
+		server:  grpc.NewServer(),
 	}
-
-	grp.server = grpc.NewServer(config.serverOpts...)
-
-	// Start RPC server
-	go grp.listen()
-
-	// Reap old connections
-	go grp.reapOld()
-
-	// Done
 	return grp, nil
 }
 
-func (g *GrpcTransport) GetServer() *grpc.Server {
-	return g.server
-}
-
-// Shutdown the TCP transport
+// Shutdown shuts down the TCP transport, closing all connections.
 func (g *GrpcTransport) Shutdown() {
 	atomic.StoreInt32(&g.shutdown, 1)
-
-	// Close all the connections
 	g.poolMtx.Lock()
-
 	g.server.Stop()
 	for _, conn := range g.pool {
 		conn.Close()
 	}
 	g.pool = nil
-
 	g.poolMtx.Unlock()
 }
 
-// Gets an outbound connection to a host
-func (g *GrpcTransport) getConn(
-	addr string,
-) (internal.ChordClient, error) {
+// GetSuccessor retrieves the successor ID of a remote node.
+func (g *GrpcTransport) GetSuccessor(node *internal.Node) (*internal.Node, error) {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	return client.GetSuccessor(ctx, emptyRequest)
+}
 
+// FindSuccessor finds the successor ID of a remote node.
+func (g *GrpcTransport) FindSuccessor(node *internal.Node, id []byte) (*internal.Node, error) {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	return client.FindSuccessor(ctx, &internal.ID{Id: id})
+}
+
+// GetPredecessor retrieves the predecessor ID of a remote node.
+func (g *GrpcTransport) GetPredecessor(node *internal.Node) (*internal.Node, error) {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	return client.GetPredecessor(ctx, emptyRequest)
+}
+
+// Notify sends a notification to a remote node.
+func (g *GrpcTransport) Notify(node, pred *internal.Node) error {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	_, err = client.Notify(ctx, pred)
+	return err
+}
+
+// getConn gets an outbound connection to a host.
+func (g *GrpcTransport) getConn(addr string) (internal.ChordClient, error) {
 	g.poolMtx.RLock()
-
 	if atomic.LoadInt32(&g.shutdown) == 1 {
 		g.poolMtx.Unlock()
 		return nil, fmt.Errorf("TCP transport is shutdown")
 	}
-
 	cc, ok := g.pool[addr]
 	g.poolMtx.RUnlock()
 	if ok {
 		return cc.client, nil
 	}
-
-	conn, err := Dial(addr, g.config.dialOpts...)
+	conn, err := Dial(addr)
 	if err != nil {
 		return nil, err
 	}
-
 	client := internal.NewChordClient(conn)
 	cc = &grpcConn{addr, client, conn, time.Now()}
 	g.poolMtx.Lock()
@@ -123,16 +178,12 @@ func (g *GrpcTransport) getConn(
 	}
 	g.pool[addr] = cc
 	g.poolMtx.Unlock()
-
 	return client, nil
 }
 
-// Returns an outbound TCP connection to the pool
+// returnConn returns an outbound TCP connection to the pool.
 func (g *GrpcTransport) returnConn(o *grpcConn) {
-	// Update the last asctive time
 	o.lastActive = time.Now()
-
-	// Push back into the pool
 	g.poolMtx.Lock()
 	defer g.poolMtx.Unlock()
 	if atomic.LoadInt32(&g.shutdown) == 1 {
@@ -142,7 +193,7 @@ func (g *GrpcTransport) returnConn(o *grpcConn) {
 	g.pool[o.addr] = o
 }
 
-// Closes old outbound connections
+// reapOld closes old outbound connections.
 func (g *GrpcTransport) reapOld() {
 	for {
 		if atomic.LoadInt32(&g.shutdown) == 1 {
@@ -153,6 +204,7 @@ func (g *GrpcTransport) reapOld() {
 	}
 }
 
+// reapOnce removes old connections from the pool.
 func (g *GrpcTransport) reapOnce() {
 	g.poolMtx.Lock()
 	defer g.poolMtx.Unlock()
@@ -164,17 +216,7 @@ func (g *GrpcTransport) reapOnce() {
 	}
 }
 
-// Listens for inbound connections
+// listen listens for inbound connections.
 func (g *GrpcTransport) listen() {
 	g.server.Serve(g.sock)
-}
-
-// Dial wraps grpc's dial function with settings that facilitate the
-// functionality of gmaj.
-func Dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	return grpc.Dial(addr, append(append(opts,
-		grpc.WithBlock(),
-		grpc.WithTimeout(5*time.Second),
-		grpc.FailOnNonTempDialError(true)),
-	)...)
 }
