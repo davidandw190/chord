@@ -24,6 +24,13 @@ const (
 	Chord_Notify_FullMethodName           = "/internal.Chord/Notify"
 	Chord_FindSuccessor_FullMethodName    = "/internal.Chord/FindSuccessor"
 	Chord_CheckPredecessor_FullMethodName = "/internal.Chord/CheckPredecessor"
+	Chord_SetPredecessor_FullMethodName   = "/internal.Chord/SetPredecessor"
+	Chord_SetSuccessor_FullMethodName     = "/internal.Chord/SetSuccessor"
+	Chord_XGet_FullMethodName             = "/internal.Chord/XGet"
+	Chord_XSet_FullMethodName             = "/internal.Chord/XSet"
+	Chord_XDelete_FullMethodName          = "/internal.Chord/XDelete"
+	Chord_XMultiDelete_FullMethodName     = "/internal.Chord/XMultiDelete"
+	Chord_XRequestKeys_FullMethodName     = "/internal.Chord/XRequestKeys"
 )
 
 // ChordClient is the client API for Chord service.
@@ -42,6 +49,20 @@ type ChordClient interface {
 	FindSuccessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Node, error)
 	// CheckPredecessor checkes whether predecessor has failed.
 	CheckPredecessor(ctx context.Context, in *ID, opts ...grpc.CallOption) (*ER, error)
+	// SetPredecessor sets predecessor for a node.
+	SetPredecessor(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ER, error)
+	// SetPredecessor sets predecessor for a node.
+	SetSuccessor(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ER, error)
+	// Get returns the value in Chord ring for the given key.
+	XGet(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error)
+	// Set writes a key value pair to the Chord ring.
+	XSet(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error)
+	// Delete returns the value in Chord ring for the given key.
+	XDelete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	// Multiple delete returns the value in Chord ring between the given keys.
+	XMultiDelete(ctx context.Context, in *MultiDeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	// RequestKeys returns the keys between given range from the Chord ring.
+	XRequestKeys(ctx context.Context, in *RequestKeysRequest, opts ...grpc.CallOption) (*RequestKeysResponse, error)
 }
 
 type chordClient struct {
@@ -97,6 +118,69 @@ func (c *chordClient) CheckPredecessor(ctx context.Context, in *ID, opts ...grpc
 	return out, nil
 }
 
+func (c *chordClient) SetPredecessor(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ER, error) {
+	out := new(ER)
+	err := c.cc.Invoke(ctx, Chord_SetPredecessor_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) SetSuccessor(ctx context.Context, in *Node, opts ...grpc.CallOption) (*ER, error) {
+	out := new(ER)
+	err := c.cc.Invoke(ctx, Chord_SetSuccessor_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) XGet(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (*GetResponse, error) {
+	out := new(GetResponse)
+	err := c.cc.Invoke(ctx, Chord_XGet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) XSet(ctx context.Context, in *SetRequest, opts ...grpc.CallOption) (*SetResponse, error) {
+	out := new(SetResponse)
+	err := c.cc.Invoke(ctx, Chord_XSet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) XDelete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+	out := new(DeleteResponse)
+	err := c.cc.Invoke(ctx, Chord_XDelete_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) XMultiDelete(ctx context.Context, in *MultiDeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+	out := new(DeleteResponse)
+	err := c.cc.Invoke(ctx, Chord_XMultiDelete_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chordClient) XRequestKeys(ctx context.Context, in *RequestKeysRequest, opts ...grpc.CallOption) (*RequestKeysResponse, error) {
+	out := new(RequestKeysResponse)
+	err := c.cc.Invoke(ctx, Chord_XRequestKeys_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ChordServer is the server API for Chord service.
 // All implementations must embed UnimplementedChordServer
 // for forward compatibility
@@ -113,6 +197,20 @@ type ChordServer interface {
 	FindSuccessor(context.Context, *ID) (*Node, error)
 	// CheckPredecessor checkes whether predecessor has failed.
 	CheckPredecessor(context.Context, *ID) (*ER, error)
+	// SetPredecessor sets predecessor for a node.
+	SetPredecessor(context.Context, *Node) (*ER, error)
+	// SetPredecessor sets predecessor for a node.
+	SetSuccessor(context.Context, *Node) (*ER, error)
+	// Get returns the value in Chord ring for the given key.
+	XGet(context.Context, *GetRequest) (*GetResponse, error)
+	// Set writes a key value pair to the Chord ring.
+	XSet(context.Context, *SetRequest) (*SetResponse, error)
+	// Delete returns the value in Chord ring for the given key.
+	XDelete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	// Multiple delete returns the value in Chord ring between the given keys.
+	XMultiDelete(context.Context, *MultiDeleteRequest) (*DeleteResponse, error)
+	// RequestKeys returns the keys between given range from the Chord ring.
+	XRequestKeys(context.Context, *RequestKeysRequest) (*RequestKeysResponse, error)
 	mustEmbedUnimplementedChordServer()
 }
 
@@ -134,6 +232,27 @@ func (UnimplementedChordServer) FindSuccessor(context.Context, *ID) (*Node, erro
 }
 func (UnimplementedChordServer) CheckPredecessor(context.Context, *ID) (*ER, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CheckPredecessor not implemented")
+}
+func (UnimplementedChordServer) SetPredecessor(context.Context, *Node) (*ER, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetPredecessor not implemented")
+}
+func (UnimplementedChordServer) SetSuccessor(context.Context, *Node) (*ER, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetSuccessor not implemented")
+}
+func (UnimplementedChordServer) XGet(context.Context, *GetRequest) (*GetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method XGet not implemented")
+}
+func (UnimplementedChordServer) XSet(context.Context, *SetRequest) (*SetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method XSet not implemented")
+}
+func (UnimplementedChordServer) XDelete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method XDelete not implemented")
+}
+func (UnimplementedChordServer) XMultiDelete(context.Context, *MultiDeleteRequest) (*DeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method XMultiDelete not implemented")
+}
+func (UnimplementedChordServer) XRequestKeys(context.Context, *RequestKeysRequest) (*RequestKeysResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method XRequestKeys not implemented")
 }
 func (UnimplementedChordServer) mustEmbedUnimplementedChordServer() {}
 
@@ -238,6 +357,132 @@ func _Chord_CheckPredecessor_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Chord_SetPredecessor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Node)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).SetPredecessor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_SetPredecessor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).SetPredecessor(ctx, req.(*Node))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_SetSuccessor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Node)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).SetSuccessor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_SetSuccessor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).SetSuccessor(ctx, req.(*Node))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_XGet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).XGet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_XGet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).XGet(ctx, req.(*GetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_XSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).XSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_XSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).XSet(ctx, req.(*SetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_XDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).XDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_XDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).XDelete(ctx, req.(*DeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_XMultiDelete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MultiDeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).XMultiDelete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_XMultiDelete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).XMultiDelete(ctx, req.(*MultiDeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Chord_XRequestKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestKeysRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChordServer).XRequestKeys(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Chord_XRequestKeys_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChordServer).XRequestKeys(ctx, req.(*RequestKeysRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Chord_ServiceDesc is the grpc.ServiceDesc for Chord service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -264,6 +509,34 @@ var Chord_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckPredecessor",
 			Handler:    _Chord_CheckPredecessor_Handler,
+		},
+		{
+			MethodName: "SetPredecessor",
+			Handler:    _Chord_SetPredecessor_Handler,
+		},
+		{
+			MethodName: "SetSuccessor",
+			Handler:    _Chord_SetSuccessor_Handler,
+		},
+		{
+			MethodName: "XGet",
+			Handler:    _Chord_XGet_Handler,
+		},
+		{
+			MethodName: "XSet",
+			Handler:    _Chord_XSet_Handler,
+		},
+		{
+			MethodName: "XDelete",
+			Handler:    _Chord_XDelete_Handler,
+		},
+		{
+			MethodName: "XMultiDelete",
+			Handler:    _Chord_XMultiDelete_Handler,
+		},
+		{
+			MethodName: "XRequestKeys",
+			Handler:    _Chord_XRequestKeys_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

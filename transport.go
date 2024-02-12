@@ -14,8 +14,12 @@ import (
 )
 
 var (
-	emptyNode    = &internal.Node{}
-	emptyRequest = &internal.ER{}
+	emptyNode                = &internal.Node{}
+	emptyRequest             = &internal.ER{}
+	emptyGetResponse         = &internal.GetResponse{}
+	emptySetResponse         = &internal.SetResponse{}
+	emptyDeleteResponse      = &internal.DeleteResponse{}
+	emptyRequestKeysResponse = &internal.RequestKeysResponse{}
 )
 
 // Transport interface defines the methods needed for a Chord ring.
@@ -24,7 +28,14 @@ type Transport interface {
 	GetSuccessor(*internal.Node) (*internal.Node, error)
 	FindSuccessor(*internal.Node, []byte) (*internal.Node, error)
 	GetPredecessor(*internal.Node) (*internal.Node, error)
+	CheckPredecessor(*internal.Node) error
 	Notify(*internal.Node, *internal.Node) error
+
+	//Storage
+	GetKey(*internal.Node, string) (*internal.GetResponse, error)
+	SetKey(*internal.Node, string, string) error
+	DeleteKey(*internal.Node, string) error
+	RequestKeys(*internal.Node, []byte, []byte) ([]*internal.KV, error)
 }
 
 // GrpcTransport struct implements the Transport interface using gRPC.
@@ -153,31 +164,105 @@ func (g *GrpcTransport) Notify(node, pred *internal.Node) error {
 	return err
 }
 
+func (g *GrpcTransport) CheckPredecessor(node *internal.Node) error {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	_, err = client.CheckPredecessor(ctx, &internal.ID{Id: node.Id})
+	return err
+}
+
+func (g *GrpcTransport) GetKey(node *internal.Node, key string) (*internal.GetResponse, error) {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	return client.XGet(ctx, &internal.GetRequest{Key: key})
+}
+
+func (g *GrpcTransport) SetKey(node *internal.Node, key, value string) error {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	_, err = client.XSet(ctx, &internal.SetRequest{Key: key, Value: value})
+	return err
+}
+
+func (g *GrpcTransport) DeleteKey(node *internal.Node, key string) error {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	_, err = client.XDelete(ctx, &internal.DeleteRequest{Key: key})
+	return err
+}
+func (g *GrpcTransport) RequestKeys(node *internal.Node, from, to []byte) ([]*internal.KV, error) {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	val, err := client.XRequestKeys(
+		ctx, &internal.RequestKeysRequest{From: from, To: to},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return val.Values, nil
+}
+
+func (g *GrpcTransport) registerNode(node *Node) {
+	internal.RegisterChordServer(g.server, node)
+}
+
 // getConn gets an outbound connection to a host.
 func (g *GrpcTransport) getConn(addr string) (internal.ChordClient, error) {
 	g.poolMtx.RLock()
+
 	if atomic.LoadInt32(&g.shutdown) == 1 {
 		g.poolMtx.Unlock()
 		return nil, fmt.Errorf("TCP transport is shutdown")
 	}
+
 	cc, ok := g.pool[addr]
 	g.poolMtx.RUnlock()
 	if ok {
 		return cc.client, nil
 	}
+
 	conn, err := Dial(addr)
 	if err != nil {
 		return nil, err
 	}
+
 	client := internal.NewChordClient(conn)
 	cc = &grpcConn{addr, client, conn, time.Now()}
 	g.poolMtx.Lock()
+
 	if g.pool == nil {
 		g.poolMtx.Unlock()
-		return nil, errors.New("must instantiate node before using")
+		return nil, errors.New("must instantiate node before usage")
 	}
+
 	g.pool[addr] = cc
 	g.poolMtx.Unlock()
+
 	return client, nil
 }
 
