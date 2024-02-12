@@ -35,6 +35,7 @@ type Transport interface {
 	GetKey(*internal.Node, string) (*internal.GetResponse, error)
 	SetKey(*internal.Node, string, string) error
 	DeleteKey(*internal.Node, string) error
+	DeleteKeys(*internal.Node, []string) error
 	RequestKeys(*internal.Node, []byte, []byte) ([]*internal.KV, error)
 }
 
@@ -210,6 +211,21 @@ func (g *GrpcTransport) DeleteKey(node *internal.Node, key string) error {
 	_, err = client.XDelete(ctx, &internal.DeleteRequest{Key: key})
 	return err
 }
+
+func (g *GrpcTransport) DeleteKeys(node *internal.Node, keys []string) error {
+	client, err := g.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	defer cancel()
+	_, err = client.XMultiDelete(
+		ctx, &internal.MultiDeleteRequest{Keys: keys},
+	)
+	return err
+}
+
 func (g *GrpcTransport) RequestKeys(node *internal.Node, from, to []byte) ([]*internal.KV, error) {
 	client, err := g.getConn(node.Addr)
 	if err != nil {
