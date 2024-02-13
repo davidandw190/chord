@@ -4,6 +4,8 @@
 
 This is a work-in-progress [Chord Distributed Hash Table (DHT) Paper](https://pdos.csail.mit.edu/papers/ton:chord/paper-ton.pdf) implementation in Go.
 
+<img src="./assets/fig5.png" alt="finger table demo" width="750"/>
+
 ## Features
 
 - **Consistent Hashing**: Achieves even data distribution across nodes for efficient retrieval.
