@@ -24,19 +24,24 @@ var (
 
 // Transport interface defines the methods needed for a Chord ring.
 type Transport interface {
-	Start()
-	GetSuccessor(*internal.Node) (*internal.Node, error)
-	FindSuccessor(*internal.Node, []byte) (*internal.Node, error)
-	GetPredecessor(*internal.Node) (*internal.Node, error)
-	CheckPredecessor(*internal.Node) error
-	Notify(*internal.Node, *internal.Node) error
+	Start() error
+	Stop() error
 
-	//Storage
-	GetKey(*internal.Node, string) (*internal.GetResponse, error)
-	SetKey(*internal.Node, string, string) error
-	DeleteKey(*internal.Node, string) error
-	DeleteKeys(*internal.Node, []string) error
-	RequestKeys(*internal.Node, []byte, []byte) ([]*internal.KV, error)
+	// RPC
+	GetSuccessor(node *internal.Node) (*internal.Node, error)
+	FindSuccessor(node *internal.Node, id []byte) (*internal.Node, error)
+	GetPredecessor(node *internal.Node) (*internal.Node, error)
+	Notify(node, pred *internal.Node) error
+	CheckPredecessor(node *internal.Node) error
+	SetPredecessor(node, pred *internal.Node) error
+	SetSuccessor(node, succ *internal.Node) error
+
+	// Storage
+	GetKey(node *internal.Node, key string) (*internal.GetResponse, error)
+	SetKey(node *internal.Node, key, value string) error
+	DeleteKey(node *internal.Node, key string) error
+	RequestKeys(node *internal.Node, from, to []byte) ([]*internal.KV, error)
+	DeleteKeys(node *internal.Node, keys []string) error
 }
 
 // GrpcTransport struct implements the Transport interface using gRPC.
@@ -65,8 +70,8 @@ type grpcConn struct {
 }
 
 // Close closes the gRPC connection.
-func (g *grpcConn) Close() {
-	g.conn.Close()
+func (gc *grpcConn) Close() {
+	gc.conn.Close()
 }
 
 // Dial wraps grpc's dial function with settings that facilitate the functionality of transport.
@@ -79,160 +84,270 @@ func Dial(addr string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
 	)...)
 }
 
-// GetServer returns the gRPC server associated with the transport.
-func (g *GrpcTransport) GetServer() *grpc.Server {
-	return g.server
-}
-
-// Start starts the RPC server and reaps old connections.
-func (g *GrpcTransport) Start() {
-	go g.listen()
-	go g.reapOld()
-}
-
-// NewGrpcTransport creates a new instance of GrpcTransport.
+// NewGrpcTransport creates a new instance of GrpcTransport with the given configuration.
 func NewGrpcTransport(config *Config) (*GrpcTransport, error) {
-	addr := config.Addr
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", config.Addr)
 	if err != nil {
 		return nil, err
 	}
+
 	pool := make(map[string]*grpcConn)
-	grp := &GrpcTransport{
+
+	grpcTransport := &GrpcTransport{
 		sock:    listener.(*net.TCPListener),
 		timeout: config.Timeout,
 		maxIdle: config.MaxIdle,
 		pool:    pool,
-		server:  grpc.NewServer(),
+		config:  config,
 	}
-	return grp, nil
+
+	grpcTransport.server = grpc.NewServer(config.ServerOpts...)
+
+	return grpcTransport, nil
 }
 
-// Shutdown shuts down the TCP transport, closing all connections.
-func (g *GrpcTransport) Shutdown() {
-	atomic.StoreInt32(&g.shutdown, 1)
-	g.poolMtx.Lock()
-	g.server.Stop()
-	for _, conn := range g.pool {
-		conn.Close()
-	}
-	g.pool = nil
-	g.poolMtx.Unlock()
+// GetServer returns the underlying gRPC server.
+func (gt *GrpcTransport) GetServer() *grpc.Server {
+	return gt.server
 }
 
-// GetSuccessor retrieves the successor ID of a remote node.
-func (g *GrpcTransport) GetSuccessor(node *internal.Node) (*internal.Node, error) {
-	client, err := g.getConn(node.Addr)
+// Gets an outbound connection to a host.
+func (gt *GrpcTransport) getConn(addr string) (internal.ChordClient, error) {
+	gt.poolMtx.RLock()
+
+	if atomic.LoadInt32(&gt.shutdown) == 1 {
+		gt.poolMtx.Unlock()
+		return nil, fmt.Errorf("TCP transport is shutdown")
+	}
+
+	cc, ok := gt.pool[addr]
+	gt.poolMtx.RUnlock()
+	if ok {
+		return cc.client, nil
+	}
+
+	conn, err := Dial(addr, gt.config.DialOpts...)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+
+	client := internal.NewChordClient(conn)
+	cc = &grpcConn{addr, client, conn, time.Now()}
+	gt.poolMtx.Lock()
+	if gt.pool == nil {
+		gt.poolMtx.Unlock()
+		return nil, errors.New("must instantiate node before using")
+	}
+	gt.pool[addr] = cc
+	gt.poolMtx.Unlock()
+
+	return client, nil
+}
+
+// Start starts the gRPC server and begins reaping old connections.
+func (gt *GrpcTransport) Start() error {
+	go gt.listen()
+	go gt.reapOld()
+
+	return nil
+}
+
+// ReturnConn returns an outbound TCP connection to the pool.
+func (gt *GrpcTransport) returnConn(gc *grpcConn) {
+	gc.lastActive = time.Now()
+
+	gt.poolMtx.Lock()
+	defer gt.poolMtx.Unlock()
+	if atomic.LoadInt32(&gt.shutdown) == 1 {
+		gc.conn.Close()
+		return
+	}
+	gt.pool[gc.addr] = gc
+}
+
+// Stop shuts down the TCP transport and closes all connections.
+func (gt *GrpcTransport) Stop() error {
+	atomic.StoreInt32(&gt.shutdown, 1)
+
+	gt.poolMtx.Lock()
+	defer gt.poolMtx.Unlock()
+
+	gt.server.Stop()
+	for _, conn := range gt.pool {
+		conn.Close()
+	}
+	gt.pool = nil
+
+	return nil
+}
+
+// ReapOld closes old outbound connections.
+func (gt *GrpcTransport) reapOld() {
+	ticker := time.NewTicker(60 * time.Second)
+
+	for {
+		if atomic.LoadInt32(&gt.shutdown) == 1 {
+			return
+		}
+		select {
+		case <-ticker.C:
+			gt.reap()
+		}
+	}
+}
+
+// Reap closes old outbound connections from the connection pool.
+func (gt *GrpcTransport) reap() {
+	gt.poolMtx.Lock()
+	defer gt.poolMtx.Unlock()
+
+	for host, conn := range gt.pool {
+		if time.Since(conn.lastActive) > gt.maxIdle {
+			conn.Close()
+			delete(gt.pool, host)
+		}
+	}
+}
+
+// Listen listens for inbound connections.
+func (gt *GrpcTransport) listen() {
+	gt.server.Serve(gt.sock)
+}
+
+// GetSuccessor gets the successor ID of a remote node.
+func (gt *GrpcTransport) GetSuccessor(node *internal.Node) (*internal.Node, error) {
+	client, err := gt.getConn(node.Addr)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	return client.GetSuccessor(ctx, emptyRequest)
 }
 
 // FindSuccessor finds the successor ID of a remote node.
-func (g *GrpcTransport) FindSuccessor(node *internal.Node, id []byte) (*internal.Node, error) {
-	client, err := g.getConn(node.Addr)
+func (gt *GrpcTransport) FindSuccessor(node *internal.Node, id []byte) (*internal.Node, error) {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	return client.FindSuccessor(ctx, &internal.ID{Id: id})
 }
 
-// GetPredecessor retrieves the predecessor ID of a remote node.
-func (g *GrpcTransport) GetPredecessor(node *internal.Node) (*internal.Node, error) {
-	client, err := g.getConn(node.Addr)
+// GetPredecessor gets the predecessor ID of a remote node.
+func (gt *GrpcTransport) GetPredecessor(node *internal.Node) (*internal.Node, error) {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	return client.GetPredecessor(ctx, emptyRequest)
 }
 
-// Notify sends a notification to a remote node.
-func (g *GrpcTransport) Notify(node, pred *internal.Node) error {
-	client, err := g.getConn(node.Addr)
+// SetPredecessor sets the predecessor ID of a remote node.
+func (gt *GrpcTransport) SetPredecessor(node, pred *internal.Node) error {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
+	defer cancel()
+	_, err = client.SetPredecessor(ctx, pred)
+	return err
+}
+
+// SetSuccessor sets the successor ID of a remote node.
+func (gt *GrpcTransport) SetSuccessor(node, succ *internal.Node) error {
+	client, err := gt.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
+	defer cancel()
+	_, err = client.SetSuccessor(ctx, succ)
+	return err
+}
+
+// Notify notifies a remote node of its predecessor.
+func (gt *GrpcTransport) Notify(node, pred *internal.Node) error {
+	client, err := gt.getConn(node.Addr)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	_, err = client.Notify(ctx, pred)
 	return err
 }
 
-func (g *GrpcTransport) CheckPredecessor(node *internal.Node) error {
-	client, err := g.getConn(node.Addr)
+// CheckPredecessor checks the predecessor of a remote node.
+func (gt *GrpcTransport) CheckPredecessor(node *internal.Node) error {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	_, err = client.CheckPredecessor(ctx, &internal.ID{Id: node.Id})
 	return err
 }
 
-func (g *GrpcTransport) GetKey(node *internal.Node, key string) (*internal.GetResponse, error) {
-	client, err := g.getConn(node.Addr)
+// GetKey retrieves a key from a remote node.
+func (gt *GrpcTransport) GetKey(node *internal.Node, key string) (*internal.GetResponse, error) {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	return client.XGet(ctx, &internal.GetRequest{Key: key})
 }
 
-func (g *GrpcTransport) SetKey(node *internal.Node, key, value string) error {
-	client, err := g.getConn(node.Addr)
+// SetKey sets a key-value pair on a remote node.
+func (gt *GrpcTransport) SetKey(node *internal.Node, key, value string) error {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	_, err = client.XSet(ctx, &internal.SetRequest{Key: key, Value: value})
 	return err
 }
 
-func (g *GrpcTransport) DeleteKey(node *internal.Node, key string) error {
-	client, err := g.getConn(node.Addr)
+// DeleteKey deletes a key from a remote node.
+func (gt *GrpcTransport) DeleteKey(node *internal.Node, key string) error {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	_, err = client.XDelete(ctx, &internal.DeleteRequest{Key: key})
 	return err
 }
 
-func (g *GrpcTransport) DeleteKeys(node *internal.Node, keys []string) error {
-	client, err := g.getConn(node.Addr)
-	if err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
-	defer cancel()
-	_, err = client.XMultiDelete(
-		ctx, &internal.MultiDeleteRequest{Keys: keys},
-	)
-	return err
-}
-
-func (g *GrpcTransport) RequestKeys(node *internal.Node, from, to []byte) ([]*internal.KV, error) {
-	client, err := g.getConn(node.Addr)
+// RequestKeys retrieves keys in a specific range from a remote node.
+func (gt *GrpcTransport) RequestKeys(node *internal.Node, from, to []byte) ([]*internal.KV, error) {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), g.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
 	defer cancel()
 	val, err := client.XRequestKeys(
 		ctx, &internal.RequestKeysRequest{From: from, To: to},
@@ -243,81 +358,17 @@ func (g *GrpcTransport) RequestKeys(node *internal.Node, from, to []byte) ([]*in
 	return val.Values, nil
 }
 
-func (g *GrpcTransport) registerNode(node *Node) {
-	internal.RegisterChordServer(g.server, node)
-}
-
-// getConn gets an outbound connection to a host.
-func (g *GrpcTransport) getConn(addr string) (internal.ChordClient, error) {
-	g.poolMtx.RLock()
-
-	if atomic.LoadInt32(&g.shutdown) == 1 {
-		g.poolMtx.Unlock()
-		return nil, fmt.Errorf("TCP transport is shutdown")
-	}
-
-	cc, ok := g.pool[addr]
-	g.poolMtx.RUnlock()
-	if ok {
-		return cc.client, nil
-	}
-
-	conn, err := Dial(addr)
+// DeleteKeys deletes multiple keys from a remote node.
+func (gt *GrpcTransport) DeleteKeys(node *internal.Node, keys []string) error {
+	client, err := gt.getConn(node.Addr)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	client := internal.NewChordClient(conn)
-	cc = &grpcConn{addr, client, conn, time.Now()}
-	g.poolMtx.Lock()
-
-	if g.pool == nil {
-		g.poolMtx.Unlock()
-		return nil, errors.New("must instantiate node before usage")
-	}
-
-	g.pool[addr] = cc
-	g.poolMtx.Unlock()
-
-	return client, nil
-}
-
-// returnConn returns an outbound TCP connection to the pool.
-func (g *GrpcTransport) returnConn(o *grpcConn) {
-	o.lastActive = time.Now()
-	g.poolMtx.Lock()
-	defer g.poolMtx.Unlock()
-	if atomic.LoadInt32(&g.shutdown) == 1 {
-		o.conn.Close()
-		return
-	}
-	g.pool[o.addr] = o
-}
-
-// reapOld closes old outbound connections.
-func (g *GrpcTransport) reapOld() {
-	for {
-		if atomic.LoadInt32(&g.shutdown) == 1 {
-			return
-		}
-		time.Sleep(30 * time.Second)
-		g.reapOnce()
-	}
-}
-
-// reapOnce removes old connections from the pool.
-func (g *GrpcTransport) reapOnce() {
-	g.poolMtx.Lock()
-	defer g.poolMtx.Unlock()
-	for host, conn := range g.pool {
-		if time.Since(conn.lastActive) > g.maxIdle {
-			conn.Close()
-			delete(g.pool, host)
-		}
-	}
-}
-
-// listen listens for inbound connections.
-func (g *GrpcTransport) listen() {
-	g.server.Serve(g.sock)
+	ctx, cancel := context.WithTimeout(context.Background(), gt.timeout)
+	defer cancel()
+	_, err = client.XMultiDelete(
+		ctx, &internal.MultiDeleteRequest{Keys: keys},
+	)
+	return err
 }

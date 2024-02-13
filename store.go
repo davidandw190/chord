@@ -6,59 +6,65 @@ import (
 	internal "github.com/davidandw190/chord/internal"
 )
 
+// Storage represents the interface for key-value storage operations in the Chord DHT.
 type Storage interface {
-	Get(string) ([]byte, error)
-	Set(string, string) error
-	Delete(string) error
-	Between([]byte, []byte) ([]*internal.KV, error)
-	MDelete(...string) error
+	Get(key string) ([]byte, error)
+	Set(key, value string) error
+	Delete(key string) error
+	Between(from, to []byte) ([]*internal.KV, error)
+	MDelete(keys ...string) error
 }
 
-type arrayStore struct {
-	data map[string]string
-	Hash hash.Hash // Hash function to use
-
-}
-
-func NewArrayStore(hashFunc hash.Hash) Storage {
-	return &arrayStore{
+// NewMapStore creates a new instance of Storage backed by an in-memory map.
+func NewMapStore(hashFunc func() hash.Hash) Storage {
+	return &mapStore{
 		data: make(map[string]string),
 		Hash: hashFunc,
 	}
 }
 
-func (a *arrayStore) hashKey(key string) ([]byte, error) {
-	h := a.Hash
-	if _, err := h.Write([]byte(key)); err != nil {
+// mapStore is an implementation of Storage using an in-memory map.
+type mapStore struct {
+	data map[string]string
+	Hash func() hash.Hash // Hash function to be used
+}
+
+// hashKey calculates the hash of the given key using the specified hash function.
+func (ms *mapStore) hashKey(key string) ([]byte, error) {
+	hasher := ms.Hash()
+	if _, err := hasher.Write([]byte(key)); err != nil {
 		return nil, err
 	}
-	val := h.Sum(nil)
-	h.Reset()
-	return val, nil
+	hashedKey := hasher.Sum(nil)
+	return hashedKey, nil
 }
 
-func (a *arrayStore) Get(key string) ([]byte, error) {
-	val, ok := a.data[key]
-	if !ok {
+// Get retrieves the value associated with the given key from the in-memory map.
+func (ms *mapStore) Get(key string) ([]byte, error) {
+	value, found := ms.data[key]
+	if !found {
 		return nil, ERR_KEY_NOT_FOUND
 	}
-	return []byte(val), nil
+	return []byte(value), nil
 }
 
-func (a *arrayStore) Set(key, value string) error {
-	a.data[key] = value
+// Set sets the value for the specified key in the in-memory map.
+func (ms *mapStore) Set(key, value string) error {
+	ms.data[key] = value
 	return nil
 }
 
-func (a *arrayStore) Delete(key string) error {
-	delete(a.data, key)
+// Delete removes the key-value pair associated with the given key from the in-memory map.
+func (ms *mapStore) Delete(key string) error {
+	delete(ms.data, key)
 	return nil
 }
 
-func (a *arrayStore) Between(from []byte, to []byte) ([]*internal.KV, error) {
-	vals := make([]*internal.KV, 0, 10)
-	for k, v := range a.data {
-		hashedKey, err := a.hashKey(k)
+// Between returns a list of key-value pairs from the in-memory map that fall within the specified key range (inclusive).
+func (ms *mapStore) Between(from []byte, to []byte) ([]*internal.KV, error) {
+	result := make([]*internal.KV, 0, 10)
+	for k, v := range ms.data {
+		hashedKey, err := ms.hashKey(k)
 		if err != nil {
 			continue
 		}
@@ -67,15 +73,16 @@ func (a *arrayStore) Between(from []byte, to []byte) ([]*internal.KV, error) {
 				Key:   k,
 				Value: v,
 			}
-			vals = append(vals, pair)
+			result = append(result, pair)
 		}
 	}
-	return vals, nil
+	return result, nil
 }
 
-func (a *arrayStore) MDelete(keys ...string) error {
-	for _, k := range keys {
-		delete(a.data, k)
+// MDelete deletes multiple keys from the in-memory map.
+func (ms *mapStore) MDelete(keys ...string) error {
+	for _, key := range keys {
+		delete(ms.data, key)
 	}
 	return nil
 }

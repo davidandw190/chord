@@ -14,25 +14,28 @@ var (
 	ERR_KEY_NOT_FOUND       = errors.New("no key found")
 )
 
+// isEqual checks if two byte slices are equal.
 func isEqual(a, b []byte) bool {
-	return bytes.Compare(a, b) == 0
+	return bytes.Equal(a, b)
 }
 
+// isPowerOfTwo checks if the given number is a power of two.
 func isPowerOfTwo(num int) bool {
 	return (num != 0) && ((num & (num - 1)) == 0)
 }
 
+// randStabilize generates a random duration within the specified range.
 func randStabilize(min, max time.Duration) time.Duration {
 	r := rand.Float64()
 	return time.Duration((r * float64(max-min)) + float64(min))
 }
 
-// check if key is between a and b, right inclusive
+// isBetweenRightIncl checks if the key is between a and b (right inclusive).
 func isBetweenRightIncl(key, a, b []byte) bool {
 	return isBetween(key, a, b) || bytes.Equal(key, b)
 }
 
-// Checks if a key is STRICTLY between two ID's exclusively
+// isBetween checks if the key is strictly between two IDs exclusively.
 func isBetween(key, a, b []byte) bool {
 	switch bytes.Compare(a, b) {
 	case 1:
@@ -45,13 +48,12 @@ func isBetween(key, a, b []byte) bool {
 	return false
 }
 
-// hashKey hashes a string to its appropriate size.
-func hashKey(key string) ([]byte, error) {
-	h := sha1.New()
-	if _, err := h.Write([]byte(key)); err != nil {
-		return nil, err
+// FOR TESTS ONLY - calculates the SHA-1 hash of the given key and returns the result as a byte slice.
+func GetHashID(key string) []byte {
+	hasher := sha1.New()
+	if _, err := hasher.Write([]byte(key)); err != nil {
+		return nil
 	}
-	v := h.Sum(nil)
-
-	return v[:8], nil
+	hashedKey := hasher.Sum(nil)
+	return hashedKey
 }

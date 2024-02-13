@@ -4,7 +4,7 @@
 // - protoc             v3.12.4
 // source: internal/chord.proto
 
-package chord
+package internal
 
 import (
 	context "context"
